@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -46,6 +48,14 @@ def find_folders(
     return sorted(matches)
 
 
+def display_path(folder: Path, root: Path) -> Path:
+    """Return a folder path relative to root when possible."""
+    try:
+        return folder.relative_to(root)
+    except ValueError:
+        return folder
+
+
 def print_results(root: Path, folders: list[Path]) -> None:
     """Print matching folders relative to the search root."""
     if not folders:
@@ -53,12 +63,115 @@ def print_results(root: Path, folders: list[Path]) -> None:
         return
 
     print(f"Found {len(folders)} folder(s):\n")
+    for index, folder in enumerate(folders, start=1):
+        print(f"  {index}. {display_path(folder, root)}")
+
+
+def parse_selection(raw: str, count: int) -> list[int]:
+    """Parse user selection like '1,3-5' into 1-based indices."""
+    if raw.strip().lower() == "all":
+        return list(range(1, count + 1))
+
+    indices: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        range_match = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            if start > end:
+                start, end = end, start
+            for index in range(start, end + 1):
+                indices.add(index)
+            continue
+
+        if not part.isdigit():
+            raise ValueError(f"Invalid selection: {part}")
+        indices.add(int(part))
+
+    invalid = [index for index in indices if index < 1 or index > count]
+    if invalid:
+        raise ValueError(f"Selection out of range: {', '.join(map(str, sorted(invalid)))}")
+
+    return sorted(indices)
+
+
+def prune_nested_selection(folders: list[Path]) -> list[Path]:
+    """Drop folders that live inside another selected folder."""
+    kept: list[Path] = []
     for folder in folders:
+        if any(folder != other and folder.is_relative_to(other) for other in folders):
+            continue
+        kept.append(folder)
+    return kept
+
+
+def select_folders(folders: list[Path]) -> list[Path]:
+    """Prompt the user to choose which folders to organize."""
+    while True:
+        raw = input(
+            "\nSelect folders to organize "
+            "(numbers, ranges like 1-3, 'all', or Enter to skip): "
+        ).strip()
+        if not raw:
+            return []
+
         try:
-            display = folder.relative_to(root)
-        except ValueError:
-            display = folder
-        print(display)
+            indices = parse_selection(raw, len(folders))
+            return [folders[index - 1] for index in indices]
+        except ValueError as error:
+            print(f"{error}. Try again.")
+
+
+def organize_folders(selected: list[Path], destination: Path) -> list[tuple[Path, Path]]:
+    """Move selected folders into a single destination folder."""
+    destination = destination.expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
+    moved: list[tuple[Path, Path]] = []
+    for folder in prune_nested_selection(selected):
+        target = destination / folder.name
+        if target.exists():
+            print(f"Skipped {folder.name}: already exists in {destination}")
+            continue
+
+        shutil.move(str(folder), str(target))
+        moved.append((folder, target))
+
+    return moved
+
+
+def prompt_organization(folders: list[Path], root: Path) -> None:
+    """Let the user pick folders and move them into one destination."""
+    selected = select_folders(folders)
+    if not selected:
+        print("No folders selected. Nothing to organize.")
+        return
+
+    print("\nSelected folders:")
+    for folder in selected:
+        print(f"  - {display_path(folder, root)}")
+
+    while True:
+        destination_raw = input(
+            "\nDestination folder (all selected folders will be moved here): "
+        ).strip()
+        if destination_raw:
+            destination = Path(destination_raw)
+            break
+        print("Please enter a destination folder.")
+
+    moved = organize_folders(selected, destination)
+    if not moved:
+        print("No folders were moved.")
+        return
+
+    print(f"\nMoved {len(moved)} folder(s) into {destination.resolve()}:")
+    for original, new_path in moved:
+        print(f"  {original.name} -> {new_path}")
 
 
 def interactive_session(default_root: Path) -> tuple[Path, list[str], bool, bool]:
@@ -110,6 +223,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Prompt for search options instead of using flags",
     )
+    parser.add_argument(
+        "--no-organize",
+        action="store_true",
+        help="Skip the organize step after folders are found",
+    )
     return parser
 
 
@@ -126,13 +244,18 @@ def main(argv: list[str] | None = None) -> int:
             match_all = not args.any
             recursive = not args.no_recursive
 
+        resolved_root = root.resolve()
         folders = find_folders(
             root,
             keywords,
             recursive=recursive,
             match_all=match_all,
         )
-        print_results(root.resolve(), folders)
+        print_results(resolved_root, folders)
+
+        if folders and not args.no_organize:
+            prompt_organization(folders, resolved_root)
+
         return 0
     except (NotADirectoryError, PermissionError, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)
