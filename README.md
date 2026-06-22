@@ -1,6 +1,6 @@
 # folder-finder
 
-A simple command-line tool for finding folders by keyword and organizing them into one place.
+A simple command-line tool for finding folders by keyword and gathering their files into one place.
 
 ## Requirements
 
@@ -26,7 +26,7 @@ You will be asked for:
 After folders are found, you can:
 
 - select which matches to organize (by number, range, or `all`)
-- choose a single destination folder where the selected folders will be moved
+- choose a single destination folder where all files from those folders will be moved
 
 ### Command-line mode
 
@@ -73,7 +73,7 @@ Search without organizing:
 python folder_finder.py -r ./projects --keywords code --no-organize
 ```
 
-### Organizing folders
+### Extracting files
 
 After a search, you will see a numbered list like:
 
@@ -87,9 +87,9 @@ Found 3 folder(s):
 
 You can then enter:
 
-- `1,3` to move folders 1 and 3
-- `1-3` to move folders 1 through 3
-- `all` to move every match
+- `1,3` to extract files from folders 1 and 3
+- `1-3` to extract files from folders 1 through 3
+- `all` to extract files from every match
 - Enter with no input to skip organizing
 
-All selected folders are moved into the destination folder you provide. If one selected folder is inside another, only the parent folder is moved.
+All files inside the selected folders (including subfolders) are moved into the destination folder you provide. If two files share the same name, the program adds a numeric suffix (for example, `report_1.pdf`). If one selected folder is inside another, files are only collected once from the parent folder.

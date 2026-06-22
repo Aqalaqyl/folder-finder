@@ -126,26 +126,54 @@ def select_folders(folders: list[Path]) -> list[Path]:
             print(f"{error}. Try again.")
 
 
-def organize_folders(selected: list[Path], destination: Path) -> list[tuple[Path, Path]]:
-    """Move selected folders into a single destination folder."""
+def unique_destination_path(destination: Path, filename: str) -> Path:
+    """Return an unused path in destination for the given filename."""
+    target = destination / filename
+    if not target.exists():
+        return target
+
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    counter = 1
+    while True:
+        candidate = destination / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def collect_files_from_folders(folders: list[Path]) -> list[Path]:
+    """Gather every file inside the selected folders."""
+    files: list[Path] = []
+    for folder in prune_nested_selection(folders):
+        for path in folder.rglob("*"):
+            if path.is_file():
+                files.append(path)
+    return sorted(files)
+
+
+def extract_files(selected: list[Path], destination: Path) -> list[tuple[Path, Path]]:
+    """Move all files from selected folders into a single destination folder."""
     destination = destination.expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
 
-    moved: list[tuple[Path, Path]] = []
-    for folder in prune_nested_selection(selected):
-        target = destination / folder.name
-        if target.exists():
-            print(f"Skipped {folder.name}: already exists in {destination}")
-            continue
+    if any(
+        destination == folder or destination.is_relative_to(folder)
+        for folder in selected
+    ):
+        raise ValueError("Destination cannot be inside a selected folder.")
 
-        shutil.move(str(folder), str(target))
-        moved.append((folder, target))
+    moved: list[tuple[Path, Path]] = []
+    for file_path in collect_files_from_folders(selected):
+        target = unique_destination_path(destination, file_path.name)
+        shutil.move(str(file_path), str(target))
+        moved.append((file_path, target))
 
     return moved
 
 
 def prompt_organization(folders: list[Path], root: Path) -> None:
-    """Let the user pick folders and move them into one destination."""
+    """Let the user pick folders and extract their files into one destination."""
     selected = select_folders(folders)
     if not selected:
         print("No folders selected. Nothing to organize.")
@@ -157,21 +185,21 @@ def prompt_organization(folders: list[Path], root: Path) -> None:
 
     while True:
         destination_raw = input(
-            "\nDestination folder (all selected folders will be moved here): "
+            "\nDestination folder (all files will be moved here): "
         ).strip()
         if destination_raw:
             destination = Path(destination_raw)
             break
         print("Please enter a destination folder.")
 
-    moved = organize_folders(selected, destination)
+    moved = extract_files(selected, destination)
     if not moved:
-        print("No folders were moved.")
+        print("No files were found in the selected folders.")
         return
 
-    print(f"\nMoved {len(moved)} folder(s) into {destination.resolve()}:")
+    print(f"\nMoved {len(moved)} file(s) into {destination.resolve()}:")
     for original, new_path in moved:
-        print(f"  {original.name} -> {new_path}")
+        print(f"  {original} -> {new_path.name}")
 
 
 def interactive_session(default_root: Path) -> tuple[Path, list[str], bool, bool]:
@@ -257,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             prompt_organization(folders, resolved_root)
 
         return 0
-    except (NotADirectoryError, PermissionError, OSError) as error:
+    except (NotADirectoryError, PermissionError, OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
